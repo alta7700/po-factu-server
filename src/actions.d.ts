@@ -20,11 +20,3 @@ interface GameAction<K extends GameActionKey = GameActionKey> {
     nonce: string;
     data: ActionsMap[K]["data"];
 }
-
-type ActionAnswer<K extends GameActionKey = GameActionKey> = {
-    error: string;
-} | {
-    success: ActionsMap[K]["answer"];
-}
-
-type GameActionHandler<K extends GameActionKey = GameActionKey> = (data: GameAction<K>["data"]) => ActionAnswer<K>;

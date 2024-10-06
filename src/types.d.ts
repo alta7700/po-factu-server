@@ -48,3 +48,11 @@ type RoomState<S extends GameStage = GameStage> = {
         facts: Fact[];
     };
 }[S]);
+
+type ActionAnswer<K extends GameActionKey = GameActionKey> = {
+    error: string;
+} | {
+    success: ActionsMap[K]["answer"];
+}
+
+type GameActionHandler<K extends GameActionKey = GameActionKey> = (data: GameAction<K>["data"]) => ActionAnswer<K>;
