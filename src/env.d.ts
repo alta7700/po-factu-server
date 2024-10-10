@@ -1,6 +1,6 @@
 declare namespace NodeJS {
     interface ProcessEnv {
-        DEBUG: "true" | "false";
+        ALLOWED_ORIGINS: string;
         PORT: string;
     }
 }

@@ -2,8 +2,6 @@ interface Player {
     readonly id: number;
     readonly name: string;
     connected: boolean;
-    knownFact: FactId | null;
-    score: number;
 }
 type PlayerId = Player["id"];
 
@@ -13,12 +11,16 @@ interface Fact {
 }
 type FactId = Fact["id"];
 
-interface CurrentTurn {
-    playerId: PlayerId;
-    factId?: FactId;
+type PlayerFinalAnswer = [FactId, PlayerId][];
+
+interface PlayerFinalResult {
+    ownAnswer: PlayerFinalAnswer;
+    rightAnswer: PlayerFinalAnswer;
+    guesses: {playerId: PlayerId, factId: FactId, guessedBy: PlayerId[]}[];
+    resultTable: [PlayerId, number][];
 }
 
-type GameStage = "waiting" | "facts" | "about" | "turns" | "final";
+type GameStage = "waiting" | "facts" | "about" | "turns" | "answers" | "final";
 type RoomState<S extends GameStage = GameStage> = {
     stage: S;
     roomCode: string;
@@ -36,16 +38,25 @@ type RoomState<S extends GameStage = GameStage> = {
     about: {
         ownFactId: FactId;
         facts: Fact[];
-        currentTurn: CurrentTurn;
+        currentTurn: PlayerId;
     };
     turns: {
         ownFactId: FactId;
         facts: Fact[];
-        currentTurn: CurrentTurn;
+        currentTurn: PlayerId;
+        candidates: [FactId, PlayerId[]][];
     };
+    answers: {
+        ownFactId: FactId;
+        facts: Fact[];
+        candidates: [FactId, PlayerId[]][];
+        answer: PlayerFinalAnswer | null;
+        answersSent: PlayerId[];
+    }
     final: {
         ownFactId: FactId;
         facts: Fact[];
+        result: PlayerFinalResult;
     };
 }[S]);
 

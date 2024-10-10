@@ -1,8 +1,8 @@
 import assert from "node:assert";
 import WebSocket from "ws";
 import RoomPlayer from "./RoomPlayer";
-import {getRandomValue} from "./utils";
-import {DROP_REWARD_SCORES, MISTAKE_PUNISHMENT_SCORES, SAME_QUESTION_PUNISHMENT_SCORES} from "./constants";
+import PlayerFact from "./PlayerFact";
+import {GUESSED_OFFS, GUESSING_REWARD} from "./constants";
 
 interface PlayerFilters {
     include?: PlayerId[];
@@ -23,7 +23,15 @@ export default class Room {
     factIdSeq: number;
 
     turnsCount: number;
-    currentTurn: Required<CurrentTurn>;
+    currentTurn: PlayerId;
+
+    cycleNum: number;
+    candidatesMap: Record<PlayerId, [FactId, PlayerId[]][]>;
+
+    playerAnswers: Partial<Record<PlayerId, PlayerFinalAnswer>>;
+
+    resultTable: [PlayerId, number][];
+    guesses: {playerId: PlayerId, factId: FactId, guessedBy: PlayerId[]}[];
 
     onClose: () => void;
     autoCloseTimer: ReturnType<typeof setTimeout> | null = null;
@@ -38,7 +46,12 @@ export default class Room {
         this.facts = [];
         this.factIdSeq = 1;
         this.turnsCount = 0;
-        this.currentTurn = {playerId: -1, factId: -1};
+        this.currentTurn = -1;
+        this.cycleNum = 0;
+        this.candidatesMap = {};
+        this.playerAnswers = {};
+        this.resultTable = [];
+        this.guesses = [];
         this.autoClose(60);
     }
     autoClose(sec: number) {
@@ -52,7 +65,7 @@ export default class Room {
     }
 
     getPlayer(id: PlayerId): RoomPlayer | undefined {
-        return this.players.find(p => p.id !== id);
+        return this.players.find(p => p.id === id);
     }
 
     private filterPlayers(filters: PlayerFilters): RoomPlayer[] {
@@ -61,7 +74,7 @@ export default class Room {
             players = players.filter(p => filters.include!.includes(p.id));
         }
         if (filters.exclude) {
-            players = players.filter(p => !filters.include!.includes(p.id));
+            players = players.filter(p => !filters.exclude!.includes(p.id));
         }
         return players;
     }
@@ -79,7 +92,6 @@ export default class Room {
                 data: {state: this.getRoomState(p.id)},
             }
             p.sendString(JSON.stringify({type: "event", ...event}));
-
         });
     }
 
@@ -90,14 +102,14 @@ export default class Room {
         if (this.stage !== "waiting") {
             return "Ввод фактов уже начался.";
         }
-        if (!this.players.every(p => this.readyPlayers.includes(p.id))) {
+        if (!this.players.every(p => this.leaderId === p.id || this.readyPlayers.includes(p.id))) {
             return "Не все игроки готовы.";
         }
         if (this.players.length < 4) {
             return "Должно быть не меньше 4 игроков.";
         }
         this.stage = "facts";
-        this.sendEvent("start_facts", {}, {exclude: [playerId]});
+        this.sendRoomState();
     }
 
     startAbout(playerId: PlayerId): string | undefined {
@@ -112,21 +124,41 @@ export default class Room {
             return "Не все игроки ввели факт";
         }
         this.stage = "about";
-        this.sendEvent("start_about", {}, {exclude: [playerId]});
-        this.sendRoomState();
+        this.candidatesMap = Object.fromEntries(this.players.map(p =>
+            [p.id, this.facts.filter(f => f.ownerId !== p.id).map(f => [f.id, []])]
+        ))
         this.setNextTurn();
+        this.sendRoomState();
     }
     startTurns() {
         assert(this.stage === "about");
         this.stage = "turns";
-        this.sendEvent("start_turns", {});
+        this.setNextTurn();
         this.sendRoomState();
     }
-    finishGame() {
+    startAnswers() {
         assert(this.stage === "turns");
+        this.stage = "answers";
+        this.sendRoomState();
+    }
+    finishGame(playerId: PlayerId): string | undefined {
+        assert(this.stage === "answers");
+        if (this.leaderId !== playerId) {
+            return "Завершить игру может только лидер комнаты.";
+        }
+        if (!this.players.every(p => p.id in this.playerAnswers)) {
+            return "Ещё не все отправили свои ответы."
+        }
         this.stage = "final";
-        this.players.forEach(p => {p.dropped = true});
-        this.sendEvent("finish_game", {});
+        this.resultTable = this.players.map(p => [
+            p.id,
+            this.playerGuesses(p.id).length * GUESSING_REWARD - this.playerGuessedBy(p.id).length * GUESSED_OFFS],
+        );
+        this.guesses = this.players.map(p => ({
+            playerId: p.id,
+            factId: this.getPlayerFact(p.id)!.id,
+            guessedBy: this.playerGuessedBy(p.id),
+        }))
         this.sendRoomState();
     }
 
@@ -163,9 +195,7 @@ export default class Room {
             players: this.players.map(p => p.toJSON()),
             ownFactId: this.getPlayerFact(playerId)!.id,
             facts: this.facts.map(f => f.toJSON()),
-            currentTurn: this.currentTurn.playerId === playerId
-                ? {...this.currentTurn}
-                : {playerId: this.currentTurn.playerId},
+            currentTurn: this.currentTurn,
         };
     }
     getTurnsRoomState(playerId: PlayerId): RoomState<"turns"> {
@@ -178,9 +208,23 @@ export default class Room {
             players: this.players.map(p => p.toJSON()),
             ownFactId: this.getPlayerFact(playerId)!.id,
             facts: this.facts.map(f => f.toJSON()),
-            currentTurn: this.currentTurn.playerId === playerId
-                ? {...this.currentTurn}
-                : {playerId: this.currentTurn.playerId},
+            currentTurn: this.currentTurn,
+            candidates: this.candidatesMap[playerId],
+        };
+    }
+    getAnswersRoomState(playerId: PlayerId): RoomState<"answers"> {
+        assert(this.stage === "answers");
+        return {
+            stage: this.stage,
+            roomCode: this.code,
+            leaderId: this.leaderId,
+            ownId: playerId,
+            players: this.players.map(p => p.toJSON()),
+            ownFactId: this.getPlayerFact(playerId)!.id,
+            facts: this.facts.map(f => f.toJSON()),
+            candidates: this.candidatesMap[playerId],
+            answer: this.playerAnswers[playerId] ?? null,
+            answersSent: Object.keys(this.playerAnswers).map(Number)
         };
     }
     getFinalRoomState(playerId: PlayerId): RoomState<"final"> {
@@ -193,6 +237,12 @@ export default class Room {
             players: this.players.map(p => p.toJSON()),
             ownFactId: this.getPlayerFact(playerId)!.id,
             facts: this.facts.map(f => f.toJSON()),
+            result: {
+                ownAnswer: this.playerAnswers[playerId]!,
+                rightAnswer: this.facts.map(f => [f.id, f.ownerId]),
+                guesses: this.guesses,
+                resultTable: this.resultTable,
+            }
         };
     }
 
@@ -206,6 +256,8 @@ export default class Room {
                 return this.getAboutRoomState(playerId);
             case "turns":
                 return this.getTurnsRoomState(playerId);
+            case "answers":
+                return this.getAnswersRoomState(playerId);
             case "final":
                 return this.getFinalRoomState(playerId);
         }
@@ -214,6 +266,9 @@ export default class Room {
     connectPlayer(id: PlayerId, name: string, connection: WebSocket): string | undefined {
         let player = this.getPlayer(id);
         if (player) {
+            if (player.connected) {
+                return "Пользователь с таким id уже подключен с другого устройства.";
+            }
             player.connection = connection;
         } else {
             if (this.stage !== "waiting") {
@@ -223,6 +278,9 @@ export default class Room {
             this.addPlayer(player);
         }
         this.sendRoomState({include: [player.id]});
+        if (this.leaderId === -1) {
+            this.setLeader(-1);
+        }
         this.dropAutoCloseTimer();
     }
     reconnectPlayer(playerId: PlayerId) {
@@ -232,16 +290,20 @@ export default class Room {
     disconnectPlayer(playerId: PlayerId) {
         if (this.stage === "waiting") {
             const idx = this.players.findIndex(p => p.id === playerId);
-            if (idx !== -1) return;
+            if (idx === -1) return;
             const [playerToExclude] = this.players.splice(idx, 1);
-            if (this.leaderId === playerToExclude.id) {
-                this.setLeader(-1);
+            const readyPlayerIdx = this.readyPlayers.findIndex(id => id === playerToExclude.id);
+            if (readyPlayerIdx !== -1) {
+                this.readyPlayers.splice(readyPlayerIdx, 1);
             }
             this.sendEvent("player_exclude", {playerId: playerToExclude.id});
         }
+        if (this.leaderId === playerId) {
+            this.setLeader(-1);
+        }
         this.players.find(p => p.id === playerId);
         this.sendEvent("player_disconnect", {playerId: playerId}, {exclude: [playerId]});
-        if (!this.players.some(p => p.connected)) {
+        if (this.players.length === 0 || this.players.every(p => !p.connected)) {
             this.autoClose(300);
         }
     }
@@ -254,25 +316,25 @@ export default class Room {
         }
     }
     setPlayerReadyState(playerId: PlayerId, state: boolean): string | undefined {
-        if (this.stage === "waiting"){
+        if (this.stage !== "waiting"){
             return "Игра уже начата, действие невозможно.";
         }
         const idx = this.readyPlayers.indexOf(playerId);
         if (state) {
+            if (!this.readyPlayers.includes(playerId)) {
+                this.readyPlayers.push(playerId);
+            }
+        } else {
             if (idx !== -1) {
                 this.readyPlayers.splice(idx, 1);
             }
-        } else {
-            if (this.readyPlayers.includes(playerId)) {
-                this.readyPlayers.push(playerId);
-            }
         }
-        this.sendEvent("player_ready_state", {playerId, state});
+        this.sendEvent("player_ready_state", {playerId, state}, {exclude: [playerId]});
     }
     setLeader(playerId: PlayerId) {
         if (playerId === -1) {
             if (this.players.length > 0) {
-                playerId = this.players[0].id;
+                playerId = this.players.find(p => p.connected)?.id ?? -1;
             }
         }
         this.leaderId = playerId;
@@ -303,121 +365,120 @@ export default class Room {
             return "Нечего сбрасывать:)";
         }
         const [factToDrop] = this.facts.splice(idx, 1);
-        this.sendEvent("fact_drop", {factId: factToDrop.id});
+        this.sendEvent("fact_drop", {factId: factToDrop.id}, {exclude: [playerId]});
     }
-    getPlayerFact(playerId: PlayerId): Fact | null {
+    getPlayerFact(playerId: PlayerId): PlayerFact | null {
         return this.facts.find(f => f.ownerId === playerId) ?? null;
     }
 
-    private getNextActivePlayer(playerId: PlayerId): PlayerId {
-        if (playerId === -1) {
-            playerId = this.players.at(-1)!.id;
-        }
-        const currentIndex = this.players.findIndex(player => player.id === playerId);
-        // Итерация по кругу, начиная с текущего индекса
-        const playersCount = this.players.length;
-        for (let i = 1; i < playersCount; i++) {
-            const nextIndex = (currentIndex + i) % playersCount; // Используем модуль для зацикливания
-            const nextPlayer = this.players[nextIndex];
-
-            // Проверяем, соответствует ли игрок условиям (connected && dropped)
-            if (nextPlayer.connected && nextPlayer.dropped) {
-                return nextPlayer.id;
+    private setNextTurn() {
+        assert(this.stage === "about" || this.stage === "turns");
+        // если -1, то будет 0 (логично, первый игрок), иначе берем следующего игрока
+        const nextTurnIndex = this.players.findIndex(p => p.id === this.currentTurn) + 1
+        let nextPlayer = this.players[nextTurnIndex];
+        // круг закончился
+        if (nextPlayer === undefined) {
+            if (this.stage === "about") {
+                return this.startTurns();
+            }
+            this.cycleNum += 1;
+            if (this.cycleNum > 4) {
+                return this.startAnswers();
+            } else {
+                nextPlayer = this.players[0];
             }
         }
-        return playerId;
+        this.currentTurn = nextPlayer.id;
     }
-    private chooseRandomFact(exclude: FactId[]): FactId {
-        const availableFacts = this.facts.filter(f => {
-            return !exclude.includes(f.id) && !this.getPlayer(f.ownerId)!.dropped;
-        }).map(f => f.id);
-        return getRandomValue(availableFacts);
-    }
-    setNextTurn() {
-        assert(this.stage === "turns" || this.stage === "about");
-        if (this.players.filter(p => p.connected && p.dropped).length < 3) {
-            return this.finishGame();
-        }
-        const nextPlayerId = this.getNextActivePlayer(this.currentTurn.playerId);
-        const nextFactID = this.chooseRandomFact([this.currentTurn.factId, this.getPlayerFact(nextPlayerId)!.id]);
-        this.currentTurn = {
-            playerId: nextPlayerId,
-            factId: nextFactID,
-        }
-        this.turnsCount += 1;
-        if (this.stage === "about" && this.turnsCount > this.players.length * 2) {
-            this.startTurns();
-        } else {
-            this.sendEvent("turn_new", {playerId: this.currentTurn.playerId}, {exclude: [this.currentTurn.playerId]});
-            this.sendEvent("turn_new", {...this.currentTurn}, {include: [this.currentTurn.playerId]});
-        }
-    }
-    answerTurn(playerId: PlayerId, ownerId: PlayerId): string | {guess: boolean, scores: number} {
-        assert(this.stage === "turns")
-        if (this.currentTurn.playerId !== playerId) {
-            return "Сейчас не Ваш ход.";
-        }
-        const owner = this.getPlayer(ownerId)!;
-        if (owner.dropped) {
-            return "Факт об этом игроке уже отгадан.";
-        }
-        const ownerFact = this.getPlayerFact(ownerId)!;
-        const currentFact = this.facts.find(f => f.id === this.currentTurn.factId)!;
 
-        let res: {guess: boolean, scores: number};
-        if (ownerFact.id === currentFact.id) {
-            owner.dropped = true;
-            this.getPlayer(playerId)!.score += DROP_REWARD_SCORES;
-            this.sendEvent("player_dropped", {
-                playerId: ownerId,
-                factId: currentFact.id,
-                byPlayerId: playerId,
-                score: DROP_REWARD_SCORES,
-            }, {exclude: [playerId]});
-            res = {guess: true, scores: DROP_REWARD_SCORES};
-        } else {
-            this.getPlayer(playerId)!.score -= MISTAKE_PUNISHMENT_SCORES;
-            this.sendEvent("answer_mistake", {
-                playerId: playerId,
-                factId: currentFact.id,
-                ownerId: owner.id,
-                score: MISTAKE_PUNISHMENT_SCORES,
-            }, {exclude: [playerId]})
-            res = {guess: false, scores: MISTAKE_PUNISHMENT_SCORES};
+    nextTurn(playerId: PlayerId): string | number | null {
+        assert(this.stage === "about" || this.stage === "turns");
+        if (this.currentTurn !== playerId) {
+            return "Сейчас не Ваш ход!";
         }
+        const stageBefore = this.stage;
         this.setNextTurn();
-        return res;
-    }
-    skipTurn(playerId: PlayerId): string | undefined {
-        assert(this.stage === "turns");
-        if (this.currentTurn.playerId !== playerId) {
-            return "Невозможно пропустить, это не Ваш ход.";
+        if (stageBefore === this.stage) {
+            this.sendEvent("turn_new", {playerId: this.currentTurn}, {exclude: [playerId]});
+            return this.currentTurn;
         }
-        this.setNextTurn();
+        return null;
     }
-    leaderSkipTurn(playerId: PlayerId) {
-        assert(this.stage === "turns")
+    leaderNextTurn(playerId: PlayerId): string | number | null {
+        assert(this.stage === "about" || this.stage === "turns");
         if (this.leaderId !== playerId) {
             return "Только лидер может пропустить чужой ход.";
         }
+        const stageBefore = this.stage;
         this.setNextTurn();
+        if (stageBefore === this.stage) {
+            this.sendEvent("turn_new", {playerId: this.currentTurn}, {exclude: [playerId]});
+            return this.currentTurn;
+        }
+        return null;
     }
 
-    punishActivePlayer(playerId: PlayerId, punishedPlayerId: PlayerId): string | number {
-        assert(this.stage === "turns");
-        if (this.leaderId !== playerId) {
-            return "Эта функция только для лидера.";
+    changeFactCandidates(playerId: PlayerId, factId: FactId, candidates: PlayerId[]): string | undefined {
+        assert(this.stage === "turns" || this.stage === "answers");
+        if (this.getPlayerFact(playerId)!.id === factId) {
+            return "Это же Ваш факт:)";
         }
-        if (this.currentTurn.playerId !== punishedPlayerId) {
-            return "Не тот игрок:)";
+
+        const playerIds = this.players.map(p => p.id);
+        if (!candidates.every(id => playerIds.includes(id))) {
+            return "Тут есть несуществующие игроки!";
         }
-        this.getPlayer(punishedPlayerId)!.score -= SAME_QUESTION_PUNISHMENT_SCORES;
-        this.sendEvent(
-            "player_punished",
-            {playerId: punishedPlayerId, scores: SAME_QUESTION_PUNISHMENT_SCORES},
-            {exclude: [playerId]},
-        );
-        this.setNextTurn();
-        return SAME_QUESTION_PUNISHMENT_SCORES;
+
+        const factCandidates = this.candidatesMap[playerId].find(([f]) => f === factId);
+        if (factCandidates === undefined) {
+            return "Не нашёл такого факта:(";
+        }
+
+        factCandidates[1] = candidates;
+    }
+
+    addAnswers(playerId: PlayerId, answer: PlayerFinalAnswer): string | undefined {
+        assert(this.stage === "answers");
+        if (playerId in this.playerAnswers) {
+            return "Ответ уже отправлен";
+        }
+        const allAnswerFacts = answer.map(([factId, ]) => factId);
+        const allAnswerPlayers = answer.map(([, playerId]) => playerId);
+        if (new Set(allAnswerFacts).size !== allAnswerFacts.length) {
+            return "Факты в ответе неуникальны.";
+        } else if (!this.facts.every(f => f.ownerId === playerId || allAnswerFacts.includes(f.id))) {
+            return "В ответе присутствуют не все факты";
+        } else if (new Set(allAnswerPlayers).size !== allAnswerPlayers.length) {
+            return "Игроки в ответе неуникальны.";
+        } else if (!this.players.every(p => p.id === playerId || allAnswerPlayers.includes(p.id))) {
+            return "В ответе присутствуют не все игроки";
+        }
+        this.playerAnswers[playerId] = answer;
+        this.sendEvent("answer_sent", {playerId}, {exclude: [playerId]});
+    }
+    dropAnswers(playerId: PlayerId): string | undefined {
+        assert(this.stage === "answers");
+        if (!(playerId in this.playerAnswers)) {
+            return "Ответ ещё не отправлен";
+        }
+        delete this.playerAnswers[playerId];
+        this.sendEvent("answer_drop", {playerId}, {exclude: [playerId]});
+    }
+
+    private playerGuessedBy(playerId: PlayerId): PlayerId[] {
+        const playerFactId = this.getPlayerFact(playerId)!.id;
+        return this.players.filter(p => {
+            if (p.id === playerId) {
+                return false;
+            }
+            const answer = this.playerAnswers[p.id]!;
+            const factAnswer = answer.find(([factId]) => factId === playerFactId)!;
+            return factAnswer[1] === playerId;
+        }).map(p => p.id)
+    }
+    private playerGuesses(playerId: PlayerId): PlayerId[] {
+        return this.playerAnswers[playerId]!
+            .filter(([factId, supposedPlayerId]) => factId === this.getPlayerFact(supposedPlayerId)!.id)
+            .map(([, supposedPlayerId]) => supposedPlayerId);
     }
 }

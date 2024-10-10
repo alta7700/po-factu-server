@@ -7,11 +7,15 @@ interface ActionsMap {
 
     start_about: {data: {}, answer: {}};
 
-    send_turn_answer: {data: {playerId: PlayerId}, answer: {guess: boolean, scores: number}};
-    skip_turn_answer: {data: {}, answer: {}};
-    leader_skip_turn_answer: {data: {}, answer: {}};
+    next_turn: {data: {}, answer: {nextPlayerId: number | null}};
+    leader_skip_turn: {data: {}, answer: {nextPlayerId: number | null}};
 
-    leader_punish_active_player: {data: {playerId: PlayerId}, answer: {scores: number}};
+    change_candidates: {data: {factId: FactId, players: PlayerId[]}, answer: {}};
+
+    answer_send: {data: {answer: PlayerFinalAnswer}, answer: {}};
+    answer_drop: {data: {}, answer: {}};
+
+    finish_game: {data: {}, answer: {}};
 }
 
 type GameActionKey = keyof ActionsMap;

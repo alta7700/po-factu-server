@@ -1,4 +1,4 @@
-class PlayerFact {
+export default class PlayerFact {
     id: FactId;
     text: string;
     ownerId: PlayerId;

@@ -1,3 +1,2 @@
-export const DROP_REWARD_SCORES = 500;
-export const MISTAKE_PUNISHMENT_SCORES = 150;
-export const SAME_QUESTION_PUNISHMENT_SCORES = 250;
+export const GUESSING_REWARD = 200;
+export const GUESSED_OFFS = 100;

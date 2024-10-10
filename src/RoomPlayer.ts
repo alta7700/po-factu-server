@@ -6,8 +6,6 @@ export default class RoomPlayer {
     readonly id: PlayerId;
     readonly name: string;
     private _connection: WebSocket | null = null;
-    dropped: boolean;
-    score: number;
     room: Room;
 
     constructor(id: PlayerId, name: string, connection: WebSocket, room: Room) {
@@ -15,8 +13,6 @@ export default class RoomPlayer {
         this.name = name;
         this._connection = connection;
         this.initConnection();
-        this.dropped = false;
-        this.score = 0;
         this.room = room;
     }
 
@@ -100,26 +96,38 @@ export default class RoomPlayer {
         return {success: {}};
     }
 
-    _action_send_turn_answer: GameActionHandler<"send_turn_answer"> = (data) => {
-        const res = this.room.answerTurn(this.id, data.playerId);
+    _action_next_turn: GameActionHandler<"next_turn"> = () => {
+        const res = this.room.nextTurn(this.id);
         if (typeof res === "string") return {error: res};
-        return {success: res};
+        return {success: {nextPlayerId: res}};
     }
-    _action_skip_turn_answer: GameActionHandler<"skip_turn_answer"> = (data) => {
-        const error = this.room.skipTurn(this.id);
-        if (error) return {error};
-        return {success: {}};
+    _action_leader_skip_turn: GameActionHandler<"leader_skip_turn"> = () => {
+        const res = this.room.leaderNextTurn(this.id);
+        if (typeof res === "string") return {error: res};
+        return {success: {nextPlayerId: res}};
     }
-    _action_leader_skip_turn_answer: GameActionHandler<"leader_skip_turn_answer"> = (data) => {
-        const error = this.room.leaderSkipTurn(this.id);
+
+    _action_change_candidates: GameActionHandler<"change_candidates"> = ({factId, players}) => {
+        const error = this.room.changeFactCandidates(this.id, factId, players);
         if (error) return {error};
         return {success: {}};
     }
 
-    _action_leader_punish_active_player: GameActionHandler<"leader_punish_active_player"> = (data) => {
-        const res = this.room.punishActivePlayer(this.id, data.playerId);
-        if (typeof res === "string") return {error: res};
-        return {success: {scores: res}};
+    _action_answer_send: GameActionHandler<"answer_send"> = ({answer}) => {
+        const error = this.room.addAnswers(this.id, answer);
+        if (error) return {error};
+        return {success: {}};
+    }
+    _action_answer_drop: GameActionHandler<"answer_drop"> = () => {
+        const error = this.room.dropAnswers(this.id);
+        if (error) return {error};
+        return {success: {}};
+    }
+
+    _action_finish_game: GameActionHandler<"finish_game"> = () => {
+        const error = this.room.finishGame(this.id);
+        if (error) return {error};
+        return {success: {}};
     }
 
     toJSON(): Player {
@@ -127,8 +135,6 @@ export default class RoomPlayer {
             id: this.id,
             name: this.name,
             connected: this.connected,
-            knownFact: this.dropped ? this.room.getPlayerFact(this.id)!.id : null,
-            score: this.score,
         }
     }
 }
