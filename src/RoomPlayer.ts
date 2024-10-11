@@ -6,6 +6,7 @@ export default class RoomPlayer {
     readonly id: PlayerId;
     readonly name: string;
     private _connection: WebSocket | null = null;
+    photo: string | null;
     room: Room;
 
     constructor(id: PlayerId, name: string, connection: WebSocket, room: Room) {
@@ -13,6 +14,7 @@ export default class RoomPlayer {
         this.name = name;
         this._connection = connection;
         this.initConnection();
+        this.photo = null;
         this.room = room;
     }
 
@@ -134,6 +136,7 @@ export default class RoomPlayer {
         return {
             id: this.id,
             name: this.name,
+            photo: this.photo,
             connected: this.connected,
         }
     }

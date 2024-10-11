@@ -1,10 +1,10 @@
 import express, { Express, Request, Response } from "express";
 import WebSocket, {Server} from "ws";
 import dotenv from "dotenv";
+dotenv.config();
 import {generateRoomCode} from "./utils";
 import Room from "./Room";
-
-dotenv.config();
+import TgBot from "./TgBot";
 
 const app: Express = express();
 const port = process.env.PORT ? Number(process.env.PORT) : 5000;
@@ -53,3 +53,6 @@ wss.on("connection", (ws: WebSocket, req) => {
         ws.close();
     }
 });
+TgBot.updates.startPolling().then(() => {
+    console.log("start polling")
+})

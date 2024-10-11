@@ -3,6 +3,7 @@ import WebSocket from "ws";
 import RoomPlayer from "./RoomPlayer";
 import PlayerFact from "./PlayerFact";
 import {GUESSED_OFFS, GUESSING_REWARD} from "./constants";
+import {getUserPhoto} from "./TgBot";
 
 interface PlayerFilters {
     include?: PlayerId[];
@@ -270,16 +271,24 @@ export default class Room {
                 return "Пользователь с таким id уже подключен с другого устройства.";
             }
             player.connection = connection;
+            this.sendRoomState({include: [player.id]});
+            if (this.leaderId === -1) {
+                this.setLeader(-1);
+            }
         } else {
             if (this.stage !== "waiting") {
                 return "Невозможно присоединиться к этой комнате, игра уже началась.";
             }
             player = new RoomPlayer(id, name, connection, this)
             this.addPlayer(player);
-        }
-        this.sendRoomState({include: [player.id]});
-        if (this.leaderId === -1) {
-            this.setLeader(-1);
+            getUserPhoto(player.id)
+                .then(photo => {
+                    player!.photo = photo;
+                    this.sendRoomState({include: [player!.id]});
+                    if (this.leaderId === -1) {
+                        this.setLeader(-1);
+                    }
+                });
         }
         this.dropAutoCloseTimer();
     }

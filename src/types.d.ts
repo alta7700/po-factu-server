@@ -1,6 +1,7 @@
 interface Player {
     readonly id: number;
     readonly name: string;
+    photo: string | null;
     connected: boolean;
 }
 type PlayerId = Player["id"];
