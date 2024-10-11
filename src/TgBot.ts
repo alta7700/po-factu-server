@@ -1,14 +1,32 @@
-import {InlineKeyboard, Telegram} from "puregram";
+import {InlineKeyboard, MediaSourceTo, Telegram} from "puregram";
 import assert from "node:assert";
+import * as fs from "node:fs";
+import path from "node:path";
 
 const TgBot = Telegram.fromToken(process.env.TG_BOT_TOKEN!);
 const WebAppUrl = process.env.WEB_APP_URL;
 assert(WebAppUrl)
 
+function getAvatarPath(fileId: string): string {
+    const avatarsDir = path.join(__dirname, 'avatars');
+    if (!fs.existsSync(avatarsDir)) {
+        fs.mkdirSync(avatarsDir);
+    }
+    return path.join(avatarsDir, fileId);
+}
+
 export async function getUserPhoto(user_id: number): Promise<string | null> {
-    return TgBot.api.getUserProfilePhotos({user_id, limit: 1}).then((res) => {
-        console.log(res.photos);
-        return null;
+    return TgBot.api.getUserProfilePhotos({user_id, limit: 1}).then(async (res) => {
+        if (res.photos.length > 0) {
+            const fileId = res.photos[0][0].file_id;
+            const avatarPath = getAvatarPath(fileId);
+            if (!fs.existsSync(avatarPath)) {
+                await TgBot.downloadFile(fileId, MediaSourceTo.path(avatarPath));
+            }
+            return fileId;
+        } else {
+            return null;
+        }
     }).catch(() => null);
 }
 
@@ -46,6 +64,7 @@ TgBot.updates.on("message", context => {
         context.send(rules, {parse_mode: "HTML", reply_markup: InlineKeyboard.keyboard([[
             InlineKeyboard.webAppButton({text: "Играть", url: WebAppUrl})
         ]])})
+        context.download()
     }
 })
 
