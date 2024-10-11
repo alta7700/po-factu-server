@@ -5,18 +5,21 @@ dotenv.config();
 import {generateRoomCode} from "./utils";
 import Room from "./Room";
 import TgBot from "./TgBot";
+import path from "node:path";
 
 const app: Express = express();
 const port = process.env.PORT ? Number(process.env.PORT) : 5000;
 
-if (process.env.ALLOWED_ORIGINS ) {
+app.use("/avatars", express.static(path.join(__dirname, "avatars")));
+
+if (process.env.ALLOWED_ORIGINS) {
     app.use(require('cors')({
         origin: process.env.ALLOWED_ORIGINS.split(','),
         exposedHeaders: ["Connection", "Upgrade"]
     }));
 }
 
-app.post("/infact/new", (_: Request, res: Response) => {
+app.post("/new", (_: Request, res: Response) => {
     const code = generateRoomCode((value) => value in rooms);
     rooms[code] = new Room(code, () => { delete rooms[code] });
     return res.status(200).send(code);
@@ -26,7 +29,7 @@ const server = app.listen(port, "0.0.0.0", () => {
     console.log(`[server]: Server is running at http://localhost:${port}`);
 });
 
-const wss = new Server({server, path: "/infact"});
+const wss = new Server({server, path: ""});
 
 const rooms: Record<string, Room> = {}
 
