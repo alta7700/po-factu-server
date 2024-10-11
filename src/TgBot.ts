@@ -64,7 +64,6 @@ TgBot.updates.on("message", context => {
         context.send(rules, {parse_mode: "HTML", reply_markup: InlineKeyboard.keyboard([[
             InlineKeyboard.webAppButton({text: "Играть", url: WebAppUrl})
         ]])})
-        context.download()
     }
 })
 
