@@ -31,7 +31,6 @@ export async function getUserPhoto(user_id: number): Promise<string | null> {
 }
 
 const rules = (
-    "Привет, я создан, чтобы помочь незнакомым людям узнать друг о друге.\n" +
     "Игра состоит из 5 этапов.\n" +
     "\n" +
     "<b>Этап 1. Напишите короткий факт о себе.</b>\n" +
