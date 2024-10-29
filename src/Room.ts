@@ -391,7 +391,7 @@ export default class Room {
                 return this.startTurns();
             }
             this.cycleNum += 1;
-            if (this.cycleNum > 4) {
+            if (this.cycleNum > 2) {
                 return this.startAnswers();
             } else {
                 nextPlayer = this.players[0];
